@@ -1,3 +1,5 @@
+ml_model/input_songs/.svn*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
