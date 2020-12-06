@@ -1,11 +1,13 @@
 import glob
 import os
 import pickle
+import sys
 
 from music21 import chord, converter, instrument, note, stream
 import numpy as np
 import tensorflow as tf
 
+# TODO - Convert these to command line flags.
 USE_GPU = True
 USE_CACHE = True
 TRAIN_NETWORK = False
@@ -21,11 +23,12 @@ NUM_EPOCHS = 200
 BATCH_SIZE = 128
 TRAINING_WEIGHTS_FN = "weights_training_E{epoch:04d}_L{loss:.4f}.hdf5"
 FINAL_WEIGHTS_FILE = "weights_trained.hdf5"
-OUTPUT_NOTES = 50
+OUTPUT_NOTES = 500
 OUTPUT_FILE = "model_output.mid"
 
 if not USE_GPU:
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+TF_DEVICES = tf.config.list_physical_devices()
 
 
 def get_notes_from_midi(fns):
@@ -139,7 +142,7 @@ def predict(model, network_in_raw, pitches):
     pattern = list(network_in_raw[start])
     model_out = []
 
-    # Generate 500 notes
+    # Generate notes.
     for ni in range(OUTPUT_NOTES):
         print("Generating note: ", ni)
         net_in = np.reshape(pattern, (1, len(pattern), 1))
@@ -192,7 +195,13 @@ def create_midi(prediction_data):
 
 
 if __name__ == '__main__':
-    print("Start")
+    print("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||\nStart")
+
+    # Print system and device information.
+    print("Python version: ", sys.version)
+    print("Version info:", sys.version_info)
+    print("Tensorflow version:", tf.__version__)
+    print("Tensorflow Devices:", TF_DEVICES)
 
     # Create directory for notes cache and weights.
     if not os.path.exists(TMP_DIR):
@@ -236,4 +245,4 @@ if __name__ == '__main__':
     # Save prediction as midi file.
     create_midi(prediction_data=model_prediction)
 
-    print("End")
+    print("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||\nEnd")
