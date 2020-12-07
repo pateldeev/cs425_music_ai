@@ -26,6 +26,65 @@ FINAL_WEIGHTS_FILE = "weights_trained.hdf5"
 OUTPUT_NOTES = 500
 OUTPUT_FILE = "model_output.mid"
 
+userLoop = False
+
+# gives user option to change model parameters
+tempInput = input("Do you want to change any model parameters? y/n\n").lower()
+if tempInput == 'y':
+    userLoop = True
+
+# loops until all desired parameters have been changed
+while userLoop:
+    # lists all changeable parameters
+    print("Enter the number of the parameter you want to change")
+    print("1. USE_GPU: " + str(USE_GPU))
+    print("2. USE_CACHE: " + str(USE_CACHE))
+    print("3. TRAIN_NETWORK: " + str(TRAIN_NETWORK))
+    print("4. TMP_DIR: " + str(TMP_DIR))
+    print("5. CACHE_FILE: " + str(CACHE_FILE))
+    print("6. INPUT_MIDI_FILES: " + str(INPUT_MIDI_FILES))
+    print("7. LSTM_SEQ_LENGTH: " + str(LSTM_SEQ_LENGTH))
+    print("8. NUM_EPOCHS: " + str(NUM_EPOCHS))
+    print("9. BATCH_SIZE: " + str(BATCH_SIZE))
+    print("10. TRAINING_WEIGHTS_FN: " + str(TRAINING_WEIGHTS_FN))
+    print("11. FINAL_WEIGHTS_FILE: " + str(FINAL_WEIGHTS_FILE))
+    print("12. OUTPUT_NOTES: " + str(OUTPUT_NOTES))
+    print("13. OUTPUT_FILE: " + str(OUTPUT_FILE))
+    print("14. Exit")
+    paramChange = input()
+
+    # compares user input to possible options, then allows the to change the requested flag
+    if paramChange == '1':
+        USE_GPU = input("Enter the new parameter value: ")
+    elif paramChange == '2':
+        USE_CACHE = input("Enter the new parameter value: ")
+    elif paramChange == '3':
+        TRAIN_NETWORK = input("Enter the new parameter value: ")
+    elif paramChange == '4':
+        TMP_DIR = input("Enter the new parameter value: ")
+    elif paramChange == '5':
+        CACHE_FILE = input("Enter the new parameter value: ")
+    elif paramChange == '6':
+        INPUT_MIDI_FILES += [input("Enter the location of the file you want to add: ")]
+    elif paramChange == '7':
+        LSTM_SEQ_LENGTH = int(input("Enter the new parameter value: "))
+    elif paramChange == '8':
+        NUM_EPOCHS = int(input("Enter the new parameter value: "))
+    elif paramChange == '9':
+        BATCH_SIZE = int(input("Enter the new parameter value: "))
+    elif paramChange == '10':
+        TRAINING_WEIGHTS_FN = input("Enter the new parameter value: ")
+    elif paramChange == '11':
+        FINAL_WEIGHTS_FILE = input("Enter the new parameter value: ")
+    elif paramChange == '12':
+        OUTPUT_NOTES = int(input("Enter the new parameter value: "))
+    elif paramChange == '13':
+        OUTPUT_FILE = input("Enter the new parameter value: ")
+    elif paramChange == '14':
+        userLoop = False
+    else:
+        print("\nInvalid Input, please select another option")
+
 if not USE_GPU:
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 TF_DEVICES = tf.config.list_physical_devices()
