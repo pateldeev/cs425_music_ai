@@ -19,12 +19,6 @@ import time
 #             https://bitmidi.com/toto-africa-mid
 
 
-# error that occurred during a training session
-"""2021-03-30 16:24:24.394917: E tensorflow/stream_executor/cuda/cuda_event.cc:29] Error polling for event status: failed to query event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure
-2021-03-30 16:24:24.395092: F tensorflow/core/common_runtime/gpu/gpu_event_mgr.cc:220] Unexpected Event status: 1
-
-Process finished with exit code -1073740791 (0xC0000409)"""
-
 # TODO - Convert these to command line flags.
 USE_GPU = True
 USE_CACHE = False
