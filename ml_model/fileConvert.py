@@ -19,7 +19,7 @@ for song_folder in os.listdir(SPLIT_INPUT_MIDI_NAME):
                 songConvert += 1
                 newFileName = SPLIT_INPUT_MIDI_NAME + '"' + song_folder + '"' + "/" + outputSongName[0:outputSongName.index(inputFormat)]
 
-                cmdInput = "audio-to-midi --output " + newFileName + "mid " + newFileName + "wav" + " -a 0.9 -t 500 -C 10 -s"  #
+                cmdInput = "audio-to-midi --output " + newFileName + "mid " + newFileName + "wav" + " -a 0.9 -t 500 -C 10 -s"
 
                 # only shows progress for one song per batch to prevent cluttering
                 #if songConvert != 1:
