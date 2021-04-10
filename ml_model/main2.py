@@ -13,54 +13,62 @@ import numpy as np
 import tensorflow as tf
 import spleeter
 import time
-
+import argparse
+parser = argparse.ArgumentParser()
 
 # Song links: https://bitmidi.com/queen-bohemian-rhapsody-mid
 #             https://bitmidi.com/toto-africa-mid
 
 
-# TODO - Convert these to command line flags.
-USE_GPU = True
-USE_CACHE = False
-SEPARATE_MUSIC = False
-TRAIN_NETWORK = True
-TRAIN_TIMING = False  # set to true if note timing training is desired in addition to pitch
-PLAY_SONG = False
-TMP_DIR = 'tmp'
+# error that occurred during a training session
+"""2021-03-30 16:24:24.394917: E tensorflow/stream_executor/cuda/cuda_event.cc:29] Error polling for event status: failed to query event: CUDA_ERROR_LAUNCH_FAILED: unspecified launch failure
+2021-03-30 16:24:24.395092: F tensorflow/core/common_runtime/gpu/gpu_event_mgr.cc:220] Unexpected Event status: 1
+
+Process finished with exit code -1073740791 (0xC0000409)"""
+
+parser.add_argument("--USE_GPU", type=bool, default=True)  # use GPU to speed up training
+parser.add_argument("--USE_CACHE", type=bool, default=False)  # use note cache or parse new songs
+parser.add_argument("--SEPARATE_MUSIC", type=bool, default=False)  # separate music or use splitSongs directory
+parser.add_argument("--TRAIN_NETWORK", type=bool, default=True)  # train network or use generated weights
+parser.add_argument("--TRAIN_TIMING", type=bool, default=False)  # set to true if note timing training is desired in addition to pitch
+parser.add_argument("--PLAY_SONG", type=bool, default=False)  # choose whether to play completed song
+parser.add_argument("--TMP_DIR", type=str, default="tmp")  # directory to store weights and cache
+
 
 # Input music params.
-CACHE_FILE = "notes"
-INPUT_MIDI_FILES = glob.glob("input_songs/*.mid")
-SPLIT_INPUT_MIDI_NAME = "input_songs/splitSongs/"
+parser.add_argument("--CACHE_FILE", type=str, default="notes")  # file location to store cached notes
+parser.add_argument("--INPUT_MIDI_FILES", type=str, default=glob.glob("input_songs/*.mid"))  # location to pull midi files from
+parser.add_argument("--SPLIT_INPUT_MIDI_NAME", type=str, default="input_songs/splitSongs/")  # location split songs are stored
+parser.add_argument("--TRAIN_SONG_SOURCE", type=str, default="input_songs/trainSongs/")  # location training songs are pulled from (will be split)
 
 # Model params.
-LSTM_SEQ_LENGTH = 100  # should be higher, initially 100
-NUM_EPOCHS = 400  # initially 200
-BATCH_SIZE = 128
-SIMILARITY_CUTOFF = 0.5 # maximum ratio of pitches that can match a training song to be rejected (in any order)
-LENGTH_CUTOFF = 40  # minimum number of valid notes for song to be used for model training
-MAX_SONG_NOTES = 200  # max number of notes that will be accepted per song
+parser.add_argument("--LSTM_SEQ_LENGTH", type=int, default=100)  # sequence length modifier for notes
+parser.add_argument("--NUM_EPOCHS", type=int, default=400)  # number of training generations
+parser.add_argument("--BATCH_SIZE", type=int, default=128)  # batch size for model
+parser.add_argument("--SIMILARITY_CUTOFF", type=float, default=0.5)  # maximum ratio of pitches that can match a training song to be rejected (in any order)
+parser.add_argument("--LENGTH_CUTOFF", type=int, default=40)  # minimum number of valid notes for song to be used for model training
+parser.add_argument("--MAX_SONG_NOTES", type=int, default=200)  # max number of notes that will be accepted per song
 
 # file locations for pitch weights
-TRAINING_WEIGHTS_FN = "weights_training_E.hdf5"
-# TRAINING_WEIGHTS_FN = "weights_training_E{epoch:04d}_L{loss:.4f}.hdf5"
-FINAL_WEIGHTS_FILE = "weights_trained.hdf5"
-OUTPUT_NOTES = 300
-OUTPUT_FILE = "model_output" # .mid
-# number of instruments to train for
-MAX_STEMS = 5
-MAX_PROCESSES = 4
+parser.add_argument("--TRAINING_WEIGHTS_FN", type=str, default="weights_training_E.hdf5")  # name of training weight file
+parser.add_argument("--FINAL_WEIGHTS_FILE", type=str, default="weights_trained.hdf5")  # name of final weight file
+parser.add_argument("--OUTPUT_NOTES", type=int, default=300)  # number of notes in output file
+parser.add_argument("--OUTPUT_FILE", type=str, default="model_output" )  # output file location
+parser.add_argument("--MAX_STEMS", type=int, default=5)  # number of instruments to train for
+parser.add_argument("--MAX_PROCESSES", type=int, default=4)  # max number of parsing processes
+
 userLoop = False
+
+args = parser.parse_args()
 
 
 # separates all music in the train songs folder using spleeter
 def separate_music():
-    trainSongSource = "input_songs/trainSongs/"
     separatedSongs = os.listdir("input_songs/splitSongs")  # gets list of songs which have already been split
     print("olive")
 
     # loops through all songs in train songs folder
-    for trainSong in os.listdir(trainSongSource):
+    for trainSong in os.listdir(args.TRAIN_SONG_SOURCE):
         # gets index of file extension so songs can be filtered
         fileTypeIndex = 0
         if trainSong.__contains__(".mp3"):
@@ -74,7 +82,7 @@ def separate_music():
         if not separatedSongs.__contains__(trainSong[0:fileTypeIndex]):
             # command for splitting input song. Currently using absolute path for storage location, hopefully a workaround
             # can be found in the future
-            cmdInput = "spleeter separate " + trainSongSource + '"' + trainSong + '"' + " -p spleeter:" + str(MAX_STEMS)\
+            cmdInput = "spleeter separate " + args.TRAIN_SONG_SOURCE + '"' + trainSong + '"' + " -p spleeter:" + str(args.MAX_STEMS)\
                        + "stems -o \\Users\Puppyvolcano\PycharmProjects\MusicAIAlpha\input_songs\splitSongs"# -c mp3"
             print(cmdInput)
                        # -c. E.G. -c mp3 outputs in mp3 instead of wav
@@ -92,19 +100,19 @@ def separate_music():
 
 # converts separated songs to midi
 def convert_music():
-    for song_folder in os.listdir(SPLIT_INPUT_MIDI_NAME):
-        for outputSongName in os.listdir(SPLIT_INPUT_MIDI_NAME + song_folder):
+    for song_folder in os.listdir(args.SPLIT_INPUT_MIDI_NAME):
+        for outputSongName in os.listdir(args.SPLIT_INPUT_MIDI_NAME + song_folder):
             if "wav" in outputSongName:
 
-                outputSong = AudioSegment.from_wav(SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName)
-                newFileName = SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName[0:outputSongName.index(".wav")] + ".wav"
+                outputSong = AudioSegment.from_wav(args.SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName)
+                newFileName = args.SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName[0:outputSongName.index(".wav")] + ".wav"
                 cmdInput = "audio-to-midi " + newFileName
                 print(cmdInput)
                 songStream = os.popen(cmdInput)
 
 
 # function for separating instruments within a song
-if SEPARATE_MUSIC:
+if args.SEPARATE_MUSIC:
     separate_music()
 
 # gives user option to change model parameters
@@ -116,55 +124,55 @@ if SEPARATE_MUSIC:
 while userLoop:
     # lists all changeable parameters
     print("Enter the number of the parameter you want to change")
-    print("1. USE_GPU: " + str(USE_GPU))
-    print("2. USE_CACHE: " + str(USE_CACHE))
-    print("3. TRAIN_NETWORK: " + str(TRAIN_NETWORK))
-    print("4. TMP_DIR: " + str(TMP_DIR))
-    print("5. CACHE_FILE: " + str(CACHE_FILE))
-    print("6. INPUT_MIDI_FILES: " + str(INPUT_MIDI_FILES))
-    print("7. LSTM_SEQ_LENGTH: " + str(LSTM_SEQ_LENGTH))
-    print("8. NUM_EPOCHS: " + str(NUM_EPOCHS))
-    print("9. BATCH_SIZE: " + str(BATCH_SIZE))
-    print("10. TRAINING_WEIGHTS_FN: " + str(TRAINING_WEIGHTS_FN))
-    print("11. FINAL_WEIGHTS_FILE: " + str(FINAL_WEIGHTS_FILE))
-    print("12. OUTPUT_NOTES: " + str(OUTPUT_NOTES))
-    print("13. OUTPUT_FILE: " + str(OUTPUT_FILE))
+    print("1. USE_GPU: " + str(args.USE_GPU))
+    print("2. USE_CACHE: " + str(args.USE_CACHE))
+    print("3. TRAIN_NETWORK: " + str(args.TRAIN_NETWORK))
+    print("4. TMP_DIR: " + str(args.TMP_DIR))
+    print("5. CACHE_FILE: " + str(args.CACHE_FILE))
+    print("6. INPUT_MIDI_FILES: " + str(args.INPUT_MIDI_FILES))
+    print("7. LSTM_SEQ_LENGTH: " + str(args.LSTM_SEQ_LENGTH))
+    print("8. NUM_EPOCHS: " + str(args.NUM_EPOCHS))
+    print("9. BATCH_SIZE: " + str(args.BATCH_SIZE))
+    print("10. TRAINING_WEIGHTS_FN: " + str(args.TRAINING_WEIGHTS_FN))
+    print("11. FINAL_WEIGHTS_FILE: " + str(args.FINAL_WEIGHTS_FILE))
+    print("12. OUTPUT_NOTES: " + str(args.OUTPUT_NOTES))
+    print("13. OUTPUT_FILE: " + str(args.OUTPUT_FILE))
     print("14. Exit")
     paramChange = input()
 
     # compares user input to possible options, then allows the to change the requested flag
     if paramChange == '1':
-        USE_GPU = input("Enter the new parameter value: ")
+        args.USE_GPU = input("Enter the new parameter value: ")
     elif paramChange == '2':
-        USE_CACHE = input("Enter the new parameter value: ")
+        args.USE_CACHE = input("Enter the new parameter value: ")
     elif paramChange == '3':
-        TRAIN_NETWORK = input("Enter the new parameter value: ")
+        args.TRAIN_NETWORK = input("Enter the new parameter value: ")
     elif paramChange == '4':
-        TMP_DIR = input("Enter the new parameter value: ")
+        args.TMP_DIR = input("Enter the new parameter value: ")
     elif paramChange == '5':
-        CACHE_FILE = input("Enter the new parameter value: ")
+        args.CACHE_FILE = input("Enter the new parameter value: ")
     elif paramChange == '6':
-        INPUT_MIDI_FILES += [input("Enter the location of the file you want to add: ")]
+        args.INPUT_MIDI_FILES += [input("Enter the location of the file you want to add: ")]
     elif paramChange == '7':
-        LSTM_SEQ_LENGTH = int(input("Enter the new parameter value: "))
+        args.LSTM_SEQ_LENGTH = int(input("Enter the new parameter value: "))
     elif paramChange == '8':
-        NUM_EPOCHS = int(input("Enter the new parameter value: "))
+        args.NUM_EPOCHS = int(input("Enter the new parameter value: "))
     elif paramChange == '9':
-        BATCH_SIZE = int(input("Enter the new parameter value: "))
+        args.BATCH_SIZE = int(input("Enter the new parameter value: "))
     elif paramChange == '10':
-        TRAINING_WEIGHTS_FN = input("Enter the new parameter value: ")
+        args.TRAINING_WEIGHTS_FN = input("Enter the new parameter value: ")
     elif paramChange == '11':
-        FINAL_WEIGHTS_FILE = input("Enter the new parameter value: ")
+        args.FINAL_WEIGHTS_FILE = input("Enter the new parameter value: ")
     elif paramChange == '12':
-        OUTPUT_NOTES = int(input("Enter the new parameter value: "))
+        args.OUTPUT_NOTES = int(input("Enter the new parameter value: "))
     elif paramChange == '13':
-        OUTPUT_FILE = input("Enter the new parameter value: ")
+        args.OUTPUT_FILE = input("Enter the new parameter value: ")
     elif paramChange == '14':
         userLoop = False
     else:
         print("\nInvalid Input, please select another option")
 
-if not USE_GPU:
+if not args.USE_GPU:
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 TF_DEVICES = tf.config.list_physical_devices()
 
@@ -222,8 +230,8 @@ def get_note_now(fn, note_list, process_num, train_type):
         # goes through all notes in song and adds them if they are eligible
         for ele in notes_to_parse:
             # stops parsing notes once the desired number has been reached
-            if song_notes > MAX_SONG_NOTES:
-                if len(collected_notes) > LENGTH_CUTOFF:
+            if song_notes > args.MAX_SONG_NOTES:
+                if len(collected_notes) > args.LENGTH_CUTOFF:
                     note_list[process_num] = [collected_notes]
                     return collected_notes
                 else:
@@ -338,7 +346,7 @@ def get_note_now(fn, note_list, process_num, train_type):
                 continue
 
     # returns notes if they meet the minimum cutoff
-    if len(collected_notes) > LENGTH_CUTOFF:
+    if len(collected_notes) > args.LENGTH_CUTOFF:
         note_list[process_num] = [collected_notes]
         return collected_notes
     else:
@@ -360,7 +368,7 @@ def get_notes_from_midi(fns, train_type):
 
     x = 1
     # initializes lists at correct number of processes for user's machine
-    while x < MAX_PROCESSES:
+    while x < args.MAX_PROCESSES:
         processTime += [waitTime - x]
         processList += [multiprocessing.Process()]
         x += 1
@@ -430,15 +438,15 @@ def generate_data_sequences(notes, pitches):
 
     # Create raw inputs and outputs based on sequences.
     net_in_raw, net_out_raw = [], []
-    for i in range(len(notes) - LSTM_SEQ_LENGTH):
-        seq_in = notes[i: i + LSTM_SEQ_LENGTH]
-        seq_out = notes[i + LSTM_SEQ_LENGTH]
+    for i in range(len(notes) - args.LSTM_SEQ_LENGTH):
+        seq_in = notes[i: i + args.LSTM_SEQ_LENGTH]
+        seq_out = notes[i + args.LSTM_SEQ_LENGTH]
 
         net_in_raw.append(np.array([note_to_int[note] for note in seq_in], dtype=np.float))
         net_out_raw.append(note_to_int[seq_out])
 
     # Reshape and normalize the input into a format compatible with LSTM layers.
-    net_in = np.reshape(net_in_raw, (len(net_in_raw), LSTM_SEQ_LENGTH, 1))
+    net_in = np.reshape(net_in_raw, (len(net_in_raw), args.LSTM_SEQ_LENGTH, 1))
     net_in /= len(pitches)
 
     # Categorize outputs.
@@ -475,12 +483,12 @@ def train(model, x, y, batch_size, epochs):
     """ Train the model. """
 
     # Delete any older weights files.
-    for f in glob.glob(os.path.join(stemTempDir, TRAINING_WEIGHTS_FN[:TRAINING_WEIGHTS_FN.find('{')])):
+    for f in glob.glob(os.path.join(stemTempDir, args.TRAINING_WEIGHTS_FN[:args.TRAINING_WEIGHTS_FN.find('{')])):
         os.remove(f)
 
     # Define checkpoint to save weights during training.
     ckpt = tf.keras.callbacks.ModelCheckpoint(
-        filepath=os.path.join(stemTempDir, TRAINING_WEIGHTS_FN),
+        filepath=os.path.join(stemTempDir, args.TRAINING_WEIGHTS_FN),
         monitor='loss',
         verbose=0,
         save_best_only=True,
@@ -505,7 +513,7 @@ def predict(model, network_in_raw, pitches):
     model_out = []
 
     # Generate notes.
-    for ni in range(OUTPUT_NOTES):
+    for ni in range(args.OUTPUT_NOTES):
         print("Generating note: ", ni)
         net_in = np.reshape(pattern, (1, len(pattern), 1))
         net_in = net_in / float(len(pitches))
@@ -556,7 +564,7 @@ def check_uniqueness(song_bank, test_song):
 
         sim_score = 1.0
         # compare frequencies of notes
-        if len(trainSong) > LENGTH_CUTOFF:
+        if len(trainSong) > args.LENGTH_CUTOFF:
             for noteType in test_counts:
                 if noteType in check_counts:
                     sim_score -= abs(test_counts[noteType] / test_notes - check_counts[noteType] / check_notes)
@@ -582,7 +590,7 @@ def create_midi(prediction_data, current_stem):
     if current_stem == 1:
         currentInstrument = instrument.Piano()
     elif current_stem == 2:
-        currentInstrument = instrument.BassGuitar()
+        currentInstrument = instrument.ElectricBass()     #Bass()
     elif current_stem == 3:
         currentInstrument = instrument.SteelDrum()
     elif current_stem == 4:
@@ -628,10 +636,10 @@ def create_midi(prediction_data, current_stem):
 
     midi_stream = stream.Stream(output_notes)
 
-    midi_stream.write('midi', fp=str(OUTPUT_FILE + str(current_stem) + ".mid"))
-    if PLAY_SONG:
+    midi_stream.write('midi', fp=str(args.OUTPUT_FILE + str(current_stem) + ".mid"))
+    if args.PLAY_SONG:
         midi_stream.show('midi')  # plays midi file after generation is finished
-    print("Saved prediciton to: ", str(OUTPUT_FILE + str(current_stem) + ".mid"))
+    print("Saved prediciton to: ", str(args.OUTPUT_FILE + str(current_stem) + ".mid"))
 
 
 if __name__ == '__main__':
@@ -643,23 +651,23 @@ if __name__ == '__main__':
     print("Tensorflow version:", tf.__version__)
     print("Tensorflow Devices:", TF_DEVICES)
 
-    currentStem = 2
+    currentStem = 1
     # creates model and outputs song for each instrument
-    while currentStem <= MAX_STEMS:
+    while currentStem <= args.MAX_STEMS:
         # PITCH
         # Model is first trained to learn pitch
         trainingType = "pitch"
         noteBank = []
         notes = []
-        
+
         # used to make subdirectories and direct training based on the desired parameter to train for
-        stemTempDir = str(TMP_DIR + str(currentStem) + trainingType)
+        stemTempDir = str(args.TMP_DIR + str(currentStem) + trainingType)
         # Create directories for notes cache and weights.
         if not os.path.exists(stemTempDir):
             os.makedirs(stemTempDir)
 
         # gets music sample for current instrument
-        if not USE_CACHE:
+        if not args.USE_CACHE:
             tempName = ""
             # instrument processing order is piano, bass, drums, vocals, and other
             if currentStem == 1:
@@ -675,8 +683,8 @@ if __name__ == '__main__':
 
             # gets names of all relevant songs from subdirectories
             trainSongFiles = []
-            for songFolder in os.listdir(SPLIT_INPUT_MIDI_NAME):
-                targetLocation = SPLIT_INPUT_MIDI_NAME + songFolder + "/" + tempName + ".mid"
+            for songFolder in os.listdir(args.SPLIT_INPUT_MIDI_NAME):
+                targetLocation = args.SPLIT_INPUT_MIDI_NAME + songFolder + "/" + tempName + ".mid"
                 trainSongFiles += glob.glob(targetLocation)
             # print(trainSongFiles)
 
@@ -687,10 +695,10 @@ if __name__ == '__main__':
             for s in noteBank:
                 for nt in s:
                     notes.append(nt)
-            with open(os.path.join(stemTempDir, CACHE_FILE), "wb") as f:
+            with open(os.path.join(stemTempDir, args.CACHE_FILE), "wb") as f:
                 pickle.dump(noteBank, f)
         else:
-            with open(os.path.join(stemTempDir, CACHE_FILE), "rb") as f:
+            with open(os.path.join(stemTempDir, args.CACHE_FILE), "rb") as f:
                 noteBank = pickle.load(f)
             for s in noteBank:
                 for nt in s:
@@ -712,17 +720,17 @@ if __name__ == '__main__':
         print(model.summary())
 
         # Train model or load weights from file.
-        if TRAIN_NETWORK:
-            train(model=model, x=net_in, y=net_out, batch_size=BATCH_SIZE, epochs=NUM_EPOCHS)
-            model.save_weights(os.path.join(stemTempDir, FINAL_WEIGHTS_FILE))
+        if args.TRAIN_NETWORK:
+            train(model=model, x=net_in, y=net_out, batch_size=args.BATCH_SIZE, epochs=args.NUM_EPOCHS)
+            model.save_weights(os.path.join(stemTempDir, args.FINAL_WEIGHTS_FILE))
         else:
-            model.load_weights(os.path.join(stemTempDir, FINAL_WEIGHTS_FILE))
+            model.load_weights(os.path.join(stemTempDir, args.FINAL_WEIGHTS_FILE))
         print("Got trained model!")
 
         similarityScore = 1.0
         model_prediction = []
 
-        while similarityScore > SIMILARITY_CUTOFF:
+        while similarityScore > args.SIMILARITY_CUTOFF:
             # Generation prediction of model.
             model_prediction = predict(model=model, network_in_raw=net_in_raw, pitches=pitches)
             print("Predicted Notes:", model_prediction)
@@ -735,16 +743,16 @@ if __name__ == '__main__':
         # TIMING
         # model is trained again on the same songs based on timing instead of pitch.
         # The results are combined and output as one song
-        if TRAIN_TIMING:
+        if args.TRAIN_TIMING:
             trainingType = "timing"
 
-            stemTempDir = str(TMP_DIR + str(currentStem) + trainingType)
+            stemTempDir = str(args.TMP_DIR + str(currentStem) + trainingType)
             # Create directories for notes cache and weights.
             if not os.path.exists(stemTempDir):
                 os.makedirs(stemTempDir)
 
             # gets music sample for current instrument
-            if not USE_CACHE:
+            if not args.USE_CACHE:
                 tempName = ""
                 # instrument processing order is piano, bass, drums, vocals, and other
                 if currentStem == 1:
@@ -760,8 +768,8 @@ if __name__ == '__main__':
 
                 # gets names of all relevant songs from subdirectories
                 trainSongFiles = []
-                for songFolder in os.listdir(SPLIT_INPUT_MIDI_NAME):
-                    targetLocation = SPLIT_INPUT_MIDI_NAME + songFolder + "/" + tempName + ".mid"
+                for songFolder in os.listdir(args.SPLIT_INPUT_MIDI_NAME):
+                    targetLocation = args.SPLIT_INPUT_MIDI_NAME + songFolder + "/" + tempName + ".mid"
                     trainSongFiles += glob.glob(targetLocation)
                 # print(trainSongFiles)
 
@@ -772,10 +780,10 @@ if __name__ == '__main__':
                 for s in noteBank:
                     for nt in s:
                         notes.append(nt)
-                with open(os.path.join(stemTempDir, CACHE_FILE), "wb") as f:
+                with open(os.path.join(stemTempDir, args.CACHE_FILE), "wb") as f:
                     pickle.dump(noteBank, f)
             else:
-                with open(os.path.join(stemTempDir, CACHE_FILE), "rb") as f:
+                with open(os.path.join(stemTempDir, args.CACHE_FILE), "rb") as f:
                     noteBank = pickle.load(f)
                 for s in noteBank:
                     for nt in s:
@@ -795,17 +803,17 @@ if __name__ == '__main__':
             print(model.summary())
 
             # Train model or load weights from file.
-            if TRAIN_NETWORK:
-                train(model=model, x=net_in, y=net_out, batch_size=BATCH_SIZE, epochs=NUM_EPOCHS)
-                model.save_weights(os.path.join(stemTempDir, FINAL_WEIGHTS_FILE))
+            if args.TRAIN_NETWORK:
+                train(model=model, x=net_in, y=net_out, batch_size=args.BATCH_SIZE, epochs=args.NUM_EPOCHS)
+                model.save_weights(os.path.join(stemTempDir, args.FINAL_WEIGHTS_FILE))
             else:
-                model.load_weights(os.path.join(stemTempDir, FINAL_WEIGHTS_FILE ))
+                model.load_weights(os.path.join(stemTempDir, args.FINAL_WEIGHTS_FILE ))
             print("Got trained model!")
 
             similarityScore = 1.0
             model_prediction = []
 
-            while similarityScore > SIMILARITY_CUTOFF:
+            while similarityScore > args.SIMILARITY_CUTOFF:
                 # Generation prediction of model.
                 model_prediction = predict(model=model, network_in_raw=net_in_raw, pitches=pitches)
                 print("Predicted Notes:", model_prediction)
