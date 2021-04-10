@@ -64,7 +64,7 @@ args = parser.parse_args()
 
 # separates all music in the train songs folder using spleeter
 def separate_music():
-    separatedSongs = os.listdir("input_songs/splitSongs")  # gets list of songs which have already been split
+    separatedSongs = os.listdir(args.SPLIT_INPUT_MIDI_NAME)  # gets list of songs which have already been split
     print("olive")
 
     # loops through all songs in train songs folder
