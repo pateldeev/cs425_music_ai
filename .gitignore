@@ -1,5 +1,5 @@
 ml_model/input_songs/.svn*
-ml_model/tmp/weights_training*
+ml_model/tmp/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
