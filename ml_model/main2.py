@@ -2,94 +2,86 @@ import glob
 import os
 import pickle
 import sys
-import wave
 from pydub import AudioSegment
-import musdb
 import multiprocessing
-#import audio_to_midi
 
 from music21 import chord, converter, instrument, note, stream, common
 import numpy as np
 import tensorflow as tf
-import spleeter
 import time
 import argparse
+
+# initializes parser so constants can be changed more easily
 parser = argparse.ArgumentParser()
 
-# Song links: https://bitmidi.com/queen-bohemian-rhapsody-mid
-#             https://bitmidi.com/toto-africa-mid
+# Song links: testing songs were taken from https://www.mutopiaproject.org/
 
-parser.add_argument("--use_gpu", type=bool, default=True, help="use GPU to speed up training")
-parser.add_argument("--use_cache", type=bool, default=False, help="use note cache or parse new songs")
-parser.add_argument("--separate_music", type=bool, default=False, help="separate music or use splitSongs directory")
-parser.add_argument("--train_network", type=bool, default=True, help="train network or use generated weights")
-parser.add_argument(
-    "--train_timing", type=bool, default=False, help="set to true if note timing training is desired in addition to pitch"
-)
-parser.add_argument("--play_song", type=bool, default=False, help="choose whether to play completed song")
-parser.add_argument("--tmp_dir", type=str, default="tmp", help="directory to store weights and cache")
+parser.add_argument("--USE_GPU", type=bool, default=True, help="use GPU to speed up training")
+parser.add_argument("--USE_CACHE", type=bool, default=True, help="use note cache or parse new songs")
+parser.add_argument("--SEPARATE_MUSIC", type=bool, default=False, help="separate music or use splitSongs directory")
+parser.add_argument("--TRAIN_NETWORK", type=bool, default=False, help="train network or use generated weights")
+parser.add_argument("--PLAY_SONG", type=bool, default=False, help="choose whether to play completed song")
+parser.add_argument("--TMP_DIR", type=str, default="tmp", help="directory to store weights and cache")
 
 
 # Input music params.
-parser.add_argument("--cache_file", type=str, default="notes", help="file location to store cached notes")
+parser.add_argument("--CACHE_FILE", type=str, default="notes", help="file location to store cached notes")
 parser.add_argument(
-    "--split_input_midi_name", type=str, default="input_songs/splitSongs/", help="location split songs are stored"
+    "--SPLIT_INPUT_MIDI_NAME", type=str, default="input_songs/splitSongs/", help="location split songs are stored"
 )
 parser.add_argument(
-    "--train_song_source",
+    "--TRAIN_SONG_SOURCE",
     type=str,
     default="input_songs/trainSongs/",
     help="location training songs are pulled from (will be split)",
 )
 
 parser.add_argument(
-    "--split_songs_dir",
+    "--SPLIT_SONGS_DIR",
     type=str,
     default="input_songs/splitSongs",
     help="storage location for splitting songs)",
 )
 
-# Model params.
-parser.add_argument("--lstm_seq_length", type=int, default=100, help="sequence length modifier for notes")
-parser.add_argument("--num_epochs", type=int, default=400, help="number of training generations")
-parser.add_argument("--num_time_epochs", type=int, default=200, help="number of training generations for timing")
-parser.add_argument("--batch_size", type=int, default=128, help="batch size for model")
+parser.add_argument("--LSTM_SEQ_LENGTH", type=int, default=20, help="sequence length modifier for notes")
+parser.add_argument("--NUM_EPOCHS", type=int, default=250, help="number of training generations")
+parser.add_argument("--NUM_TIME_EPOCHS", type=int, default=200, help="number of training generations for timing")
+parser.add_argument("--BATCH_SIZE", type=int, default=128, help="batch size for model")
 parser.add_argument(
-    "--similarity_cutoff",
+    "--SIMILARITY_CUTOFF",
     type=float,
-    default=0.5,
+    default=0.6,
     help="maximum ratio of pitches that can match a training song to be rejected (in any order)",
 )
 parser.add_argument(
-    "--length_cutoff", type=int, default=40, help="minimum number of valid notes for song to be used for model training"
+    "--LENGTH_CUTOFF", type=int, default=40, help="minimum number of valid notes for song to be used for model training"
 )
-parser.add_argument("--max_song_notes", type=int, default=200, help="max number of notes that will be accepted per song")
+parser.add_argument("--MAX_SONG_NOTES", type=int, default=400, help="max number of notes that will be accepted per song")
 
 # file locations for pitch weights
 parser.add_argument(
-    "--training_weights_fn", type=str, default="weights_training_E.hdf5", help="name of training weight file"
+    "--TRAINING_WEIGHTS_FN", type=str, default="weights_training_E.hdf5", help="name of training weight file"
 )
-parser.add_argument("--final_weights_file", type=str, default="weights_trained.hdf5", help="name of final weight file")
-parser.add_argument("--output_notes", type=int, default=300, help="number of notes in output file")
-parser.add_argument("--output_file", type=str, default="model_output", help="output file location")
-parser.add_argument("--max_stems", type=int, default=5, help="number of instruments to train for")
-parser.add_argument("--max_processes", type=int, default=4, help="max number of parsing processes")
+parser.add_argument("--FINAL_WEIGHTS_FILE", type=str, default="weights_trained.hdf5", help="name of final weight file")
+parser.add_argument("--OUTPUT_NOTES", type=int, default=100, help="number of notes in output file")
+parser.add_argument("--OUTPUT_FILE", type=str, default="model_output", help="output file location")
+parser.add_argument("--MAX_STEMS", type=int, default=5, help="number of instruments to train for")
+parser.add_argument("--MAX_PROCESSES", type=int, default=4, help="max number of parsing processes")
 
 # used to override train_network and use_cache so they only apply to timing or training. If false,
 # note cache and the most recent pretrained model will be used. Main purpose is to make testing easier
-parser.add_argument("--train_timing", type=bool, default=True, help="set to true if note timing training is desired")
-parser.add_argument("--train_pitch", type=bool, default=True, help="set to true if note pitch training is desired")
+parser.add_argument("--TRAIN_TIMING", type=bool, default=True, help="set to true if note timing training is desired")
+parser.add_argument("--TRAIN_PITCH", type=bool, default=True, help="set to true if note pitch training is desired")
 # Input music params.
-parser.add_argument("--raw_midi_loc", type=list,
+parser.add_argument("--RAW_MIDI_LOC", type=list,
                     default=["input_songs/tempPiano/", "input_songs/tempBass/", "input_songs/tempDrums/",
-                             "input_songs/tempVocals/", "input_songs/tempEtc/"],
+                             "input_songs/tempVocals/", "input_songs/tempMisc/"],
                     help="location raw midi files for each instrument are stored")
 
 parser.add_argument("--IMPORT_FROM_MIDI", type=bool, default=True,
                     help="determines whether songs need to be split or are midi files that can be read directly")
 
-userLoop = False
-
+# adds arguments to parser
 args = parser.parse_args()
 
 
@@ -125,16 +117,16 @@ def separate_music():
             print(trainSong + " already split")
 
     # converts music files to midi. Only works with Python 3.9 which some other functions don't work with.
-    # currently converting using command line, multiple Python channels is our backup plan
-    #convert_music()
+    # currently converting using command line locally to test, converted with multiple Python channels on our website
+    # convert_music()
 
 
 # converts separated songs to midi
 def convert_music():
+    # goes through folder for each song
     for song_folder in os.listdir(args.SPLIT_INPUT_MIDI_NAME):
         for outputSongName in os.listdir(args.SPLIT_INPUT_MIDI_NAME + song_folder):
             if "wav" in outputSongName:
-
                 outputSong = AudioSegment.from_wav(args.SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName)
                 newFileName = args.SPLIT_INPUT_MIDI_NAME + song_folder + "/" + outputSongName[0:outputSongName.index(".wav")] + ".wav"
                 cmdInput = "audio-to-midi " + newFileName
@@ -145,60 +137,6 @@ def convert_music():
 # function for separating instruments within a song
 if args.SEPARATE_MUSIC:
     separate_music()
-
-# gives user option to change model parameters
-#tempInput = input("Do you want to change any model parameters? y/n\n").lower()
-#if tempInput == 'y':
-#    userLoop = True
-
-# loops until all desired parameters have been changed
-while userLoop:
-    # lists all changeable parameters
-    print("Enter the number of the parameter you want to change")
-    print("1. USE_GPU: " + str(args.USE_GPU))
-    print("2. USE_CACHE: " + str(args.USE_CACHE))
-    print("3. TRAIN_NETWORK: " + str(args.TRAIN_NETWORK))
-    print("4. TMP_DIR: " + str(args.TMP_DIR))
-    print("5. CACHE_FILE: " + str(args.CACHE_FILE))
-    print("7. LSTM_SEQ_LENGTH: " + str(args.LSTM_SEQ_LENGTH))
-    print("8. NUM_EPOCHS: " + str(args.NUM_EPOCHS))
-    print("9. BATCH_SIZE: " + str(args.BATCH_SIZE))
-    print("10. TRAINING_WEIGHTS_FN: " + str(args.TRAINING_WEIGHTS_FN))
-    print("11. FINAL_WEIGHTS_FILE: " + str(args.FINAL_WEIGHTS_FILE))
-    print("12. OUTPUT_NOTES: " + str(args.OUTPUT_NOTES))
-    print("13. OUTPUT_FILE: " + str(args.OUTPUT_FILE))
-    print("14. Exit")
-    paramChange = input()
-
-    # compares user input to possible options, then allows the to change the requested flag
-    if paramChange == '1':
-        args.USE_GPU = input("Enter the new parameter value: ")
-    elif paramChange == '2':
-        args.USE_CACHE = input("Enter the new parameter value: ")
-    elif paramChange == '3':
-        args.TRAIN_NETWORK = input("Enter the new parameter value: ")
-    elif paramChange == '4':
-        args.TMP_DIR = input("Enter the new parameter value: ")
-    elif paramChange == '5':
-        args.CACHE_FILE = input("Enter the new parameter value: ")
-    elif paramChange == '7':
-        args.LSTM_SEQ_LENGTH = int(input("Enter the new parameter value: "))
-    elif paramChange == '8':
-        args.NUM_EPOCHS = int(input("Enter the new parameter value: "))
-    elif paramChange == '9':
-        args.BATCH_SIZE = int(input("Enter the new parameter value: "))
-    elif paramChange == '10':
-        args.TRAINING_WEIGHTS_FN = input("Enter the new parameter value: ")
-    elif paramChange == '11':
-        args.FINAL_WEIGHTS_FILE = input("Enter the new parameter value: ")
-    elif paramChange == '12':
-        args.OUTPUT_NOTES = int(input("Enter the new parameter value: "))
-    elif paramChange == '13':
-        args.OUTPUT_FILE = input("Enter the new parameter value: ")
-    elif paramChange == '14':
-        userLoop = False
-    else:
-        print("\nInvalid Input, please select another option")
 
 if not args.USE_GPU:
     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -211,7 +149,7 @@ chordCounts = {}
 totalChords = 1
 
 
-# multiprocessing note collector
+# collects notes of desired type from given file
 def get_note_now(fn, note_list, process_num, train_type):
     global noteCounts
     global totalNotes
@@ -340,13 +278,32 @@ def get_note_now(fn, note_list, process_num, train_type):
     # parse notes from raw midi directory, no filter needed
     else:
         try:  # File has instrument parts.
+            # take part with highest note total
             s2 = instrument.partitionByInstrument(midi)
-            notes_to_parse = s2.parts[0].recurse()
+
+            maxPart = 0
+            maxNotes = 0
+
+            # finds part with most notes
+            for parts in s2.parts:
+                currentPart = 0
+                currentNotes = 0
+                for nts in parts.recurse():
+                    currentNotes += 1
+                if currentNotes > maxNotes:
+                    maxNotes = currentNotes
+                    maxPart = currentPart
+                currentPart += 1
+
+            #notes_to_parse = s2.parts[maxPart].recurse()
+            notes_to_parse = midi.flat.notes
         except:  # File has notes in a flat structure.
             notes_to_parse = midi.flat.notes
+            #print(notes_to_parse)
 
         # goes through all notes in song and adds them if they are eligible
         for ele in notes_to_parse:
+            #print(ele)
             # stops parsing notes once the desired number has been reached
             if song_notes > args.MAX_SONG_NOTES:
                 if len(collected_notes) > args.LENGTH_CUTOFF:
@@ -382,8 +339,10 @@ def get_note_now(fn, note_list, process_num, train_type):
                     collected_notes.append(float(ele.duration.quarterLength))
                 song_notes += 1
             else:
-                # print(ele)
+                #print(ele)
                 continue
+
+    #print(collected_notes)
 
     # returns notes if they meet the minimum cutoff
     if len(collected_notes) > args.LENGTH_CUTOFF:
@@ -394,7 +353,8 @@ def get_note_now(fn, note_list, process_num, train_type):
         return []
 
 
-# Get all the notes and chords from the midi files.
+# Iterates through all music files and calls get_note_now to parse them for notes. Calls in a multithreaded manner and
+# caps parsing time for each song to speed up performance
 def get_notes_from_midi(fns, train_type):
     # multithreaded file parsing
     # noteList = common.runParallel(fns, parallelFunction=get_note_now) # old multiprocessing method
@@ -468,9 +428,9 @@ def get_notes_from_midi(fns, train_type):
     #print(note)
 
 
+# Generates the data sequences used by the Neural Network.
+# Returns (network inputs raw (unscaled), network inputs, network outputs or labels)
 def generate_data_sequences(notes, pitches):
-    """ Generates the data sequences used by the Neural Network.
-    Returns (network inputs raw (unscaled), network inputs, network outputs or labels) """
     # Map between notes and integers.
     note_to_int = {
         note: num for num, note in enumerate(pitches)
@@ -495,8 +455,9 @@ def generate_data_sequences(notes, pitches):
     return net_in_raw, net_in, net_out
 
 
+# creates a tensorflow LSTM based model based on information parsed from songs
 def create_model(net_in, pitches):
-    """ Create the tensorflow LSTM based model. """
+    # initializes model
     model = tf.keras.Sequential()
     model.add(tf.keras.layers.LSTM(
         512,
@@ -504,6 +465,7 @@ def create_model(net_in, pitches):
         recurrent_dropout=0.3,
         return_sequences=True
     ))
+    # adds layers
     model.add(tf.keras.layers.LSTM(512, return_sequences=True, recurrent_dropout=0.3))
     model.add(tf.keras.layers.LSTM(512))
     model.add(tf.keras.layers.BatchNormalization())
@@ -514,14 +476,14 @@ def create_model(net_in, pitches):
     model.add(tf.keras.layers.Dropout(0.3))
     model.add(tf.keras.layers.Dense(len(pitches)))
     model.add(tf.keras.layers.Activation('softmax'))
+    # compiles model before returning it
     model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
 
     return model
 
 
+# train the model for the desired number of epochs
 def train(model, x, y, batch_size, epochs):
-    """ Train the model. """
-
     # Delete any older weights files.
     for f in glob.glob(os.path.join(stemTempDir, args.TRAINING_WEIGHTS_FN[:args.TRAINING_WEIGHTS_FN.find('{')])):
         os.remove(f)
@@ -534,17 +496,13 @@ def train(model, x, y, batch_size, epochs):
         save_best_only=True,
         mode='min',
     )
-    y = [y]
 
     # Train model.
-    #print(x.shape)
-    #print(y.shape)
-
     model.fit(x=x, y=y, epochs=epochs, batch_size=batch_size, callbacks=[ckpt])
 
 
+# uses trained model to generate output notes
 def predict(model, network_in_raw, pitches, training_type):
-    """ Generate notes from the neural network. """
     # Pick a random sequence from the input as a starting point for the prediction
     start = np.random.randint(0, len(network_in_raw)-1)
 
@@ -569,9 +527,10 @@ def predict(model, network_in_raw, pitches, training_type):
         i = np.argmax(y_hat)
 
         # prints every 5th note
-        #if ni % 5 == 0:
+        # if ni % 5 == 0:
         #    print(pitches[i])
 
+        # appends in different way depending on if pitch or timing is being trained
         if training_type == "pitch":
             model_out.append(int_to_note[i])
         else:
@@ -580,6 +539,7 @@ def predict(model, network_in_raw, pitches, training_type):
         pattern.append(i)
         pattern.pop(0)
 
+    # returns generated song
     return model_out
 
 
@@ -599,7 +559,9 @@ def check_uniqueness(song_bank, test_song):
         check_counts[songNote] = check_counts[songNote] + 1
         check_notes += 1
 
+    # keeps track of worst similarity score so the comparison to the most similar song is returned
     worstScore = 0.0
+
     # goes through each song that was used for training and compares each note frequency to the generated song
     # keeps the score of the song that is most similar to the generated song by this metric, which will be
     # used for filtering later
@@ -626,9 +588,12 @@ def check_uniqueness(song_bank, test_song):
                     sim_score -= test_counts[noteType] / test_notes
         else:
             sim_score = 0.0
+
+        # stores current similarity score if it is the worst so far
         if sim_score > worstScore:
             worstScore = sim_score
 
+    # prints similarity score before returning it
     print("Similarity Score: ", str(worstScore))
 
     return worstScore
@@ -698,14 +663,21 @@ def create_midi(prediction_data, timing_data, current_stem):
         # increments current note number
         currentNote += 1
 
+    # creates midi stream
     midi_stream = stream.Stream(output_notes)
 
+    # writes song to file
     midi_stream.write('midi', fp=str(args.OUTPUT_FILE + str(current_stem) + ".mid"))
+
+    # plays midi file after generation is finished if desired
     if args.PLAY_SONG:
-        midi_stream.show('midi')  # plays midi file after generation is finished
+        midi_stream.show('midi')
+
+    # prints song storage location
     print("Saved prediciton to: ", str(args.OUTPUT_FILE + str(current_stem) + ".mid"))
 
 
+# calls other functions to train model and generate songs
 if __name__ == '__main__':
     print("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||\nStart")
 
@@ -714,6 +686,10 @@ if __name__ == '__main__':
     print("Version info:", sys.version_info)
     print("Tensorflow version:", tf.__version__)
     print("Tensorflow Devices:", TF_DEVICES)
+
+    # arrays used for notes
+    note_prediction_bank = []
+    time_prediction_bank = []
 
     currentStem = 1
     # creates model and outputs song for each instrument
@@ -768,6 +744,7 @@ if __name__ == '__main__':
                     notes.append(nt)
             with open(os.path.join(stemTempDir, args.CACHE_FILE), "wb") as f:
                 pickle.dump(noteBank, f)
+        # get notes from cache instead of parsing files
         else:
             with open(os.path.join(stemTempDir, args.CACHE_FILE), "rb") as f:
                 noteBank = pickle.load(f)
@@ -801,6 +778,7 @@ if __name__ == '__main__':
         similarityScore = 1.0
         note_prediction = []
 
+        # generates notes until the output song falls within the similarity cutoff
         while similarityScore > args.SIMILARITY_CUTOFF:
             # Generation prediction of model.
             note_prediction = predict(model=model, network_in_raw=net_in_raw, pitches=pitches, training_type=trainingType)
@@ -851,6 +829,7 @@ if __name__ == '__main__':
                     quarterLengths.append(nt)
             with open(os.path.join(stemTempDir, args.CACHE_FILE), "wb") as f:
                 pickle.dump(timingBank, f)
+        # get notes from cache instead of parsing files
         else:
             with open(os.path.join(stemTempDir, args.CACHE_FILE), "rb") as f:
                 timingBank = pickle.load(f)
@@ -864,6 +843,9 @@ if __name__ == '__main__':
 
         # Get network inputs and outputs (labels).
         net_in_raw, net_in, net_out = generate_data_sequences(notes=quarterLengths, pitches=noteLengths)
+
+        # prints network inputs and outputs
+        #print(net_out)
         #print("Network inputs: ", net_in)
         #print("Network ouputs: ", net_out)
 
@@ -888,6 +870,10 @@ if __name__ == '__main__':
         timing_prediction = predict(model=model, network_in_raw=net_in_raw, pitches=noteLengths, training_type=trainingType)
         print("Predicted Quarter Lengths:", timing_prediction)
         # similarityScore = check_uniqueness(timingBank, timing_prediction)
+
+        # adds notes to combined bank for later combined song
+        note_prediction_bank += [note_prediction]
+        time_prediction_bank += [timing_prediction]
 
         # Save prediction as midi file.
         create_midi(prediction_data=note_prediction, timing_data=timing_prediction, current_stem=currentStem)
