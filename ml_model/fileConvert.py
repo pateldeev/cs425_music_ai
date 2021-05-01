@@ -6,7 +6,7 @@ import time
 
 from pydub import AudioSegment
 
-parser = argparse.ArgumentParser(description="INput sour")
+parser = argparse.ArgumentParser(description="Input source")
 parser.add_argument("--input_dir", type=str, default="input_songs/splitSongs/", help="input directory")
 
 args = parser.parse_args()
@@ -17,9 +17,9 @@ args = parser.parse_args()
 # converts separated songs to midi
 for song_folder in os.listdir(args.input_dir):
     currentDirectory = os.listdir(args.input_dir + song_folder)
-    coreDirectory = "C:\\Users\Puppyvolcano\PycharmProjects\MusicAIAlpha\\"  # project file location
     songConvert = 0  # keeps program from sleeping when no songs are being converted
-    inputFormat = "wav"
+    inputFormat = "wav"  # input file type
+    # loops through all songs in directory
     for outputSongName in currentDirectory:
         # if wav file has not already been converted, convert it
         if inputFormat in outputSongName:
@@ -36,4 +36,5 @@ for song_folder in os.listdir(args.input_dir):
                 #    cmdInput.append(" -n")
                 print(cmdInput)
                 songStream = os.popen(cmdInput)
+    # gives songs time to convert
     time.sleep(20 * songConvert)
