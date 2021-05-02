@@ -14,7 +14,7 @@ args = parser.parse_args()
 # when run from command prompt, all training songs are converted to .mid for use later in the program
 # py fileConvert.py
 
-# converts separated songs to midi
+# Converts separated songs to midi.
 for song_folder in os.listdir(args.input_dir):
     currentDirectory = os.listdir(args.input_dir + song_folder)
     songConvert = 0  # keeps program from sleeping when no songs are being converted

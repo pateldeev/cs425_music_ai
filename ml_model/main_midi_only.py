@@ -1,3 +1,5 @@
+# Training script that only works with midi files of piano music.
+
 import argparse
 import glob
 import os
@@ -5,6 +7,7 @@ import pickle
 import shutil
 import sys
 import wave
+from collections import defaultdict
 
 import musdb
 import numpy as np
@@ -36,6 +39,7 @@ parser.add_argument("--final_weights_file", type=str, default="weights_trained.h
 parser.add_argument("--output_notes", type=int, default=50)
 parser.add_argument("--output_file", type=str, default="/home/dp/Desktop/cs425_music_ai/ml_model/model_output.mid")
 
+# Parse command line arguments.
 args = parser.parse_args()
 
 # Configure GPU.
@@ -43,7 +47,7 @@ if args.no_gpu:
     # Don't use GPU.
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 else:
-    # Prevent GPU memory overflow.
+    # Prevent GPU memory overflow during training.
     tf.config.experimental.set_memory_growth(tf.config.list_physical_devices("GPU")[0], enable=True)
 
 # Constants.
@@ -52,38 +56,54 @@ TF_DEVICES = tf.config.list_physical_devices()
 
 
 def get_notes_from_midi(fns):
-    """ Get all the notes and chords from the midi files. """
+    """
+    Get all the notes and chords from the midi files.
+    Param: List of files to parse
+    Return: 2-D list of notes. One list of notes per input song
+    """
     notes = []
 
     for fn in sorted(fns):
+        notes.append([])
+        if not fn.endswith((".mid", ".midi")):
+            # Only support midi files.
+            continue
+
+        # Copy file to temporary directory.
         fn_tmp = os.path.join(args.tmp_dir, fn[fn.rfind("/") + 1 :]) + ".mid"
         shutil.copyfile(fn, fn_tmp)
         midi = converter.parse(fn_tmp)
 
+        # Prase file.
         print("Parsing input file: ", fn)
         sys.stdout.flush()
-
-        try:  # File has instrument parts.
+        try:
+            # File has instrument parts.
             s2 = instrument.partitionByInstrument(midi)
             notes_to_parse = s2.parts[0].recurse()
-        except:  # File has notes in a flat structure.
+        except:
+            # File has notes in a flat structure.
             notes_to_parse = midi.flat.notes
 
+        # Make note. This version only supports piano chords.
         for ele in notes_to_parse:
             if isinstance(ele, note.Note):
-                notes.append(str(ele.pitch))
+                notes[-1].append(str(ele.pitch))
             elif isinstance(ele, chord.Chord):
-                notes.append(".".join(str(n) for n in ele.normalOrder))
+                notes[-1].append(".".join(str(n) for n in ele.normalOrder))
             else:
-                # TODO(deev): Handle Instrument Types.
+                # TODO(deev): Handle more instrument and vocal types.
                 continue
 
     return notes
 
 
 def generate_data_sequences(notes, pitches):
-    """Generates the data sequences used by the Neural Network.
-    Returns (network inputs raw (unscaled), network inputs, network outputs or labels)"""
+    """
+    Generates the data sequences used by the Neural Network.
+    Param: (2D list of notes, set of pitches)
+    Return: (network inputs raw (unscaled), network inputs (scaled), network outputs or labels)
+    """
     # Map between notes and integers.
     note_to_int = {note: num for num, note in enumerate(pitches)}
 
@@ -107,7 +127,11 @@ def generate_data_sequences(notes, pitches):
 
 
 def create_model(net_in, pitches):
-    """ Create the tensorflow LSTM based model. """
+    """
+    Create the tensorflow LSTM based model.
+    Param: (network inputs, set of pitches)
+    Output: Tensorflow keras LSTM model
+    """
     model = tf.keras.Sequential()
     model.add(
         tf.keras.layers.LSTM(
@@ -124,13 +148,20 @@ def create_model(net_in, pitches):
     model.add(tf.keras.layers.Dropout(0.3))
     model.add(tf.keras.layers.Dense(len(pitches)))
     model.add(tf.keras.layers.Activation("softmax"))
+
+    # Use |categorical_crossentropy| loss functionand |rmsprop| optimizer.
+    # TODO(deev): Experiment with more optimizers and training params (like learning rate) to see if we do better.
     model.compile(loss="categorical_crossentropy", optimizer="rmsprop")
 
     return model
 
 
 def train(model, x, y, batch_size, epochs):
-    """ Train the model. """
+    """
+    Train the model.
+    Param: (the tensorflow model, list of examples, list of labels for inputs, batch size, number of epochs to train for)
+    Return: None. The input model will now be trained.
+    """
 
     # Delete any older weights files.
     for f in glob.glob(os.path.join(args.tmp_dir, TRAINING_WEIGHTS_FN[: TRAINING_WEIGHTS_FN.find("{")])):
@@ -139,6 +170,7 @@ def train(model, x, y, batch_size, epochs):
     # Define checkpoint to save weights during training.
     ckpt = tf.keras.callbacks.ModelCheckpoint(
         filepath=os.path.join(args.tmp_dir, TRAINING_WEIGHTS_FN),
+        save_freq=len(x),
         monitor="loss",
         verbose=0,
         save_best_only=True,
@@ -150,7 +182,11 @@ def train(model, x, y, batch_size, epochs):
 
 
 def predict(model, network_in_raw, pitches, num_notes):
-    """ Generate notes from the neural network. """
+    """
+    Generates predictions from the neural network. Creates a new song.
+    Param: (trained model, list of unscaled network inputs used for training, set of pitches, number of notes to generate)
+    Return: list of new notes.
+    """
     # Pick a random sequence from the input as a starting point for the prediction
     start = np.random.randint(0, len(network_in_raw) - 1)
 
@@ -180,14 +216,18 @@ def predict(model, network_in_raw, pitches, num_notes):
 
 
 def create_output_notes(prediction_data):
-    """ Creates output notes """
+    """
+    Creates output notes from the raw network output created by a call to |Predict|.
+    Param: notes generated by model
+    Return: Notes compatible with midi files.
+    """
     offset = 0
     output_notes = []
 
-    # create note and chord objects based on the values generated by the model
+    # Create note and chord objects based on the values generated by the model.
     for pattern in prediction_data:
-        # Pattern is a chord
         if ("." in pattern) or pattern.isdigit():
+            # Pattern is a chord.
             notes_in_chord = pattern.split(".")
             notes = []
             for current_note in notes_in_chord:
@@ -197,22 +237,72 @@ def create_output_notes(prediction_data):
             new_chord = chord.Chord(notes)
             new_chord.offset = offset
             output_notes.append(new_chord)
-        # Pattern is a note
         else:
+            # Pattern is a note
             new_note = note.Note(pattern)
             new_note.offset = offset
             new_note.storedInstrument = instrument.Piano()
             output_notes.append(new_note)
-        # TODO(deev): Handle Instrument Types.
 
-        # Increase offset each iteration so that notes do not stack
+        # Increase offset each iteration so that notes do not stack.
         offset += 0.5
 
     return output_notes
 
 
+#
+def check_uniqueness(song_bank, test_song):
+    """
+    Loops through all songs and generates uniqueness score for each. Returns worst performance.
+    Param: (2D song bank with notes for each song. test song for similarity analysis)
+    Return: The similarity to the song that is closest to the test song.
+    """
+    # Used to disregards songs that are too short to impactfully compare.
+    check_notes = 0
+    check_counts = defaultdict(int)
+
+    # Find frequency of all notes in generated song.
+    for song_note in test_song:
+        check_counts[song_note] += 1
+        check_notes += 1
+
+    worst_score = 0.0
+    # Go through each song that was used for training and compare each note frequency to the generated song.
+    # Keeps the score of the song that is most similar to the generated song by this metric, which will be
+    # used for filtering later.
+    for train_song in song_bank:
+        # Tracks number and type of notes for train song.
+        test_counts = {}
+        test_notes = 0
+
+        # Finds frequency of all notes in generated song.
+        for song_note in train_song:
+            if song_note not in test_counts:
+                test_counts[song_note] = 0
+
+            test_counts[song_note] = test_counts[song_note] + 1
+            test_notes += 1
+
+        sim_score = 1.0
+        # Compare frequencies of notes.
+        if len(train_song) > 40:
+            for note_type in test_counts:
+                if note_type in check_counts:
+                    sim_score -= abs(test_counts[note_type] / test_notes - check_counts[note_type] / check_notes)
+                else:
+                    sim_score -= test_counts[note_type] / test_notes
+        else:
+            sim_score = 0.0
+        worst_score = max(worst_score, sim_score)
+
+    print("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||")
+    print("Similarity Score: ", worst_score)
+    sys.stdout.flush()
+    return worst_score
+
+
 if __name__ == "__main__":
-    print("Command: ", " ".join(["python3", "/home/dp/Desktop/cs425_music_ai/ml_model/main.py"] + sys.argv[1:]))
+    print("Command: ", " ".join(["python3", "/home/dp/Desktop/cs425_music_ai/ml_model/main_old.py"] + sys.argv[1:]))
     print("|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||\nStart")
 
     # Print system and device information.
@@ -230,17 +320,20 @@ if __name__ == "__main__":
     print("||||||||||||||||||||||||||||||||||||||| Getting Notes")
     if args.use_cache:
         with open(os.path.join(args.tmp_dir, args.cache_file), "rb") as f:
-            notes = pickle.load(f)
+            notes_2d = pickle.load(f)
     else:
         input_files = args.input_files_override if args.input_files_override else glob.glob(args.input_files_glob)
         assert input_files, "No input files!"
-        notes = get_notes_from_midi(fns=input_files)
+        notes_2d = get_notes_from_midi(fns=input_files)
 
-        # Save to cache.
+        # Save to cache. Useful for debugging when running script multiple times on same inputs.
         with open(os.path.join(args.tmp_dir, args.cache_file), "wb") as f:
-            pickle.dump(notes, f)
+            pickle.dump(notes_2d, f)
     print("||||||||||||||||||||||||||||||||||||||| Done Getting Notes")
-    # print(notes)
+    # print(notes_2d)
+    notes = []
+    for notes_per_song in notes_2d:
+        notes.extend(notes_per_song)
 
     # Ordered list of unique pitches.
     pitches = sorted(set(notes))
@@ -249,7 +342,7 @@ if __name__ == "__main__":
     # Get network inputs and outputs (labels).
     net_in_raw, net_in, net_out = generate_data_sequences(notes=notes, pitches=pitches)
     # print("Network inputs: ", net_in)
-    # print("Network ouputs: ", net_out)
+    # print("Network outputs: ", net_out)
 
     # Create model.
     model = create_model(net_in=net_in, pitches=pitches)
@@ -271,10 +364,14 @@ if __name__ == "__main__":
     print("Predicted Notes:", model_prediction)
     sys.stdout.flush()
 
+    # Check similarity.
+    uniqueness_score = check_uniqueness(song_bank=notes_2d, test_song=model_prediction)
+
     # Create output notes and save output.
     print("||||||||||||||||||||||||||||||||||||||| Generating final output!")
     output_notes = create_output_notes(prediction_data=model_prediction)
 
+    # Save output song in the format requested by the user.
     midi_stream = stream.Stream(output_notes)
     output_file = args.output_file
     if output_file.endswith(".mid"):
