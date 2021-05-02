@@ -1,5 +1,6 @@
 /**
- * @class Dequeue
+ * A Fast dequeue data structure implementation that allows appending and popping data from both sides.
+ * Modified from https://github.com/swarup260/Learning_Algorithms/blob/master/data_structure/Dequeue.js
  */
 
 
@@ -56,14 +57,19 @@ class Dequeue {
         return this.items[this.lowestCount];
     }
 
+    peek(i) {
+        if (this.isEmpty()) {
+            return undefined;
+        }
+        return this.items[this.lowestCount + i];
+    }
+
     peekBack() {
         if (this.isEmpty()) {
             return undefined;
         }
         return this.items[this.count - 1];
     }
-
-
 
     isEmpty() {
         return this.count - this.lowestCount == 0;
