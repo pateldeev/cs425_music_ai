@@ -1,0 +1,2 @@
+# NodeJS Server Code
+[NodeJS](https://nodejs.org/en/) server code. Main entry point and further documentation located in [musicAI_node.js](https://github.com/pateldeev/cs425_music_ai/blob/main/local_node_server/musicAI_node.js)
